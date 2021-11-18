@@ -104,9 +104,31 @@ class HttpServer:
                 client.send(response)
                 client.close()
                 break
+            if request_method == "POST":
+            # Store the incoming json string as csv data
+                json_string = data.split('\r\n')[-1]
+                csv_string = json_to_csv(json_string)
+                with open('data.csv', 'w') as f:
+                    f.write(csv_string)
+                response_headers = self._generate_headers(200)
+                response_content = json.dumps({'message': 'OK'})
+                response = response_headers + response_content
+                client.send(response.encode())
+                client.close()
             else:
                 print("Unknown HTTP request method: {method}".format(method=request_method))
 
+
+def json_to_csv(json_string):
+    json_data = json.loads(json_string)
+    csv_data = ""
+    for i in range(len(json_data)):
+        for j in range(len(json_data[i])):
+            csv_data += str(json_data[i][j])
+            if j != len(json_data[i])-1:
+                csv_data += ","
+        csv_data += "\n"
+    return csv_data
 
 server = HttpServer('', 8080)
 server.start()
