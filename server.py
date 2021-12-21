@@ -7,12 +7,19 @@ import socket
 import threading
 import sys
 import time
+import pandas as pd
+import json
+import csv
+import os
 
 class HttpServer:
     def __init__(self, host, port):
         self.host = host
         self.port = port
         self.content_dir = 'files'
+        self.configFilePath = 'files/config.json'
+        self.configFileTimestamp = 0
+        self.configFileReloadFlag = False
 
     def start(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -36,29 +43,30 @@ class HttpServer:
         except Exception as e:
             pass # Pass if socket is already closed
 
-    def _generate_headers(self, response_code):
+    def _generate_headers(self, response_code, size=0):
         header = ''
         if response_code == 200:
             header += 'HTTP/1.1 200 OK\n'
         elif response_code == 404:
             header += 'HTTP/1.1 404 Not Found\n'
 
-        time_now = time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime())
-        header += 'Date: {now}\n'.format(now=time_now)
+        
         header += 'Server: Simple-Python-Server\n'
-        header += 'Connection: close\n\n' # Signal that connection will be closed after completing the request
-        return header
+        header += 'Connection: close\n' # Signal that connection will be closed after completing the request
+        header += f'Content-Length: {size+2}\n\n'
+        return header 
 
     def _listen(self):
         self.socket.listen(5)
         while True:
             (client, address) = self.socket.accept()
             #client.settimeout(0)
+            time.sleep(0.2)
             print("Recieved connection from {addr}".format(addr=address))
             threading.Thread(target=self._handle_client, args=(client, address)).start()
 
     def _handle_client(self, client, address):
-        PACKET_SIZE = 1024
+        PACKET_SIZE = 10000
         while True:
             print("CLIENT",client)
             data = client.recv(PACKET_SIZE).decode() # Recieve data packet from client and decode
@@ -81,6 +89,9 @@ class HttpServer:
 
                 filepath_to_serve = self.content_dir + file_requested
                 print("Serving web page [{fp}]".format(fp=filepath_to_serve))
+                self.configFilePath = filepath_to_serve
+                self.configFileReloadFlag = False
+                print('Config File has been requested, now clear reload flag')
 
                 # Load and Serve files content
                 try:
@@ -88,7 +99,7 @@ class HttpServer:
                     if request_method == "GET": # Read only for GET
                         response_data = f.read()
                     f.close()
-                    response_header = self._generate_headers(200)
+                    response_header = self._generate_headers(200, len(response_data))
 
                 except Exception as e:
                     print("File not found. Serving 404 page.")
@@ -106,29 +117,32 @@ class HttpServer:
                 break
             if request_method == "POST":
             # Store the incoming json string as csv data
-                json_string = data.split('\r\n')[-1]
-                csv_string = json_to_csv(json_string)
-                with open('data.csv', 'w') as f:
-                    f.write(csv_string)
-                response_headers = self._generate_headers(200)
-                response_content = json.dumps({'message': 'OK'})
+                
+                if(self.configFileTimestamp != os.path.getmtime(self.configFilePath)):
+                    self.configFileTimestamp = os.path.getmtime(self.configFilePath)
+                    self.configFileReloadFlag = True
+                    print('Config File has been updated, now set reload flag')
+                
+                time_now = time.strftime("%Y %m %d %H:%M:%S", time.localtime())
+                #time_date = 'Date: {now}\n'.format(now=time_now)
+                response_content = json.dumps({'Date': time_now, 'ConfigReload': self.configFileReloadFlag})
+                response_headers = self._generate_headers(200, len(response_content))
                 response = response_headers + response_content
                 client.send(response.encode())
                 client.close()
+                
+                lines = data.splitlines()
+                jsondata = json.loads(lines[-1])
+                #print(jsondata)
+                df = pd.DataFrame(jsondata)
+                with open('data.csv', 'a') as f:
+                    df.to_csv(f, header=False)
+#                     f.write(f"{jsondata}\n")
+                
+                break
             else:
                 print("Unknown HTTP request method: {method}".format(method=request_method))
 
 
-def json_to_csv(json_string):
-    json_data = json.loads(json_string)
-    csv_data = ""
-    for i in range(len(json_data)):
-        for j in range(len(json_data[i])):
-            csv_data += str(json_data[i][j])
-            if j != len(json_data[i])-1:
-                csv_data += ","
-        csv_data += "\n"
-    return csv_data
-
-server = HttpServer('', 8080)
+server = HttpServer("10.3.141.1", 8080)
 server.start()
