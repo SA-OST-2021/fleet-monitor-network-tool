@@ -5,6 +5,8 @@ A html file server written in python
 
 import socket
 import threading
+import platform
+import pathlib
 import sys
 import time
 import pandas as pd
@@ -13,13 +15,19 @@ import csv
 import os
 
 class HttpServer:
-    def __init__(self, host, port):
+    def __init__(self, host, port, append=False):
         self.host = host
         self.port = port
-        self.content_dir = 'files'
-        self.configFilePath = 'files/config.json'
+        self.path = pathlib.Path(os.path.dirname(os.path.realpath(__file__)))  # Path of this file
+        self.content_dir = self.path / 'files'
+        self.configFilePath = self.path / 'files' / 'config.json'
         self.configFileTimestamp = 0
         self.configFileReloadFlag = False
+        self.appendFile = append
+        self.dataDir = self.path / "data"
+        pathlib.Path(self.dataDir).mkdir(parents=True, exist_ok=True)
+        if(not self.appendFile):
+            list(map(os.unlink, (os.path.join(self.dataDir,f) for f in os.listdir(self.dataDir))))
 
     def start(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -31,7 +39,7 @@ class HttpServer:
         except Exception as e:
             print("Error: Could not bind to port {port}".format(port=self.port))
             self.shutdown()
-            sys.exit(1)
+            return False
 
         self._listen()
 
@@ -75,7 +83,7 @@ class HttpServer:
 
             request_method = data.split(' ')[0]
             print("Method: {m}".format(m=request_method))
-            print("Request Body: {b}".format(b=data))
+            # print("Request Body: {b}".format(b=data))
 
             if request_method == "GET" or request_method == "HEAD":
                 # Ex) "GET /index.html" split on space
@@ -85,9 +93,11 @@ class HttpServer:
                 file_requested =  file_requested.split('?')[0]
 
                 if file_requested == "/":
-                    file_requested = "/index.html"
+                    file_requested = "index.html"
+                else:
+                    file_requested = file_requested.split('/')[1] # trimm "/"
 
-                filepath_to_serve = self.content_dir + file_requested
+                filepath_to_serve = self.content_dir / file_requested
                 print("Serving web page [{fp}]".format(fp=filepath_to_serve))
                 self.configFilePath = filepath_to_serve
                 self.configFileReloadFlag = False
@@ -111,13 +121,11 @@ class HttpServer:
                 response = response_header.encode()
                 if request_method == "GET":
                     response += response_data
-
                 client.send(response)
                 client.close()
                 break
             if request_method == "POST":
             # Store the incoming json string as csv data
-                
                 if(self.configFileTimestamp != os.path.getmtime(self.configFilePath)):
                     self.configFileTimestamp = os.path.getmtime(self.configFilePath)
                     self.configFileReloadFlag = True
@@ -133,16 +141,28 @@ class HttpServer:
                 
                 lines = data.splitlines()
                 jsondata = json.loads(lines[-1])
-                #print(jsondata)
+                
                 df = pd.DataFrame(jsondata)
-                with open('data.csv', 'a') as f:
-                    df.to_csv(f, header=False)
-#                     f.write(f"{jsondata}\n")
+                print(df)
+                if(self.appendFile):
+                    df.to_csv('data.csv', mode='a', header=False)  
+                else:
+                    try:
+                        index = sorted([int(i.split('.')[0]) for i in os.listdir(self.dataDir)])[-1] + 1
+                    except:
+                        index = 0
+                    df.to_csv(self.dataDir / f"{index:06}.csv", mode='w', header=False)
                 
                 break
             else:
                 print("Unknown HTTP request method: {method}".format(method=request_method))
 
 
-server = HttpServer("10.3.141.1", 8080)
-server.start()
+if __name__ == '__main__':
+    if(platform.system() == "Windows"):
+        server = HttpServer("10.3.141.176", 50000, True)
+    else:
+        server = HttpServer("10.3.141.1", 8080, True)
+    if(server.start() == False):
+        print("Server could not be started")
+        sys.exit(1)
